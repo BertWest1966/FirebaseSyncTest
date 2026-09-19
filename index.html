@@ -19,14 +19,32 @@
       max-width: 900px;
       margin: 0 auto;
     }
-    h1 {
-      margin: 0 0 8px;
-      font-size: 28px;
+    h1 { margin: 0 0 8px; font-size: 28px; }
+    .sub { margin: 0 0 20px; opacity: .75; }
+    .card {
+      border: 1px solid color-mix(in srgb, CanvasText 18%, transparent);
+      border-radius: 12px;
+      padding: 14px;
+      margin-bottom: 16px;
     }
-    .sub {
-      margin: 0 0 20px;
-      opacity: .75;
+    .row {
+      display: flex;
+      gap: 10px;
+      align-items: center;
+      flex-wrap: wrap;
     }
+    input, button {
+      font: inherit;
+      padding: 10px 12px;
+      border-radius: 10px;
+      border: 1px solid color-mix(in srgb, CanvasText 18%, transparent);
+    }
+    input {
+      min-width: 260px;
+      background: Canvas;
+      color: CanvasText;
+    }
+    button { cursor: pointer; }
     .statusbar {
       display: grid;
       gap: 8px;
@@ -34,12 +52,6 @@
       padding: 14px;
       border: 1px solid color-mix(in srgb, CanvasText 18%, transparent);
       border-radius: 12px;
-    }
-    .row {
-      display: flex;
-      gap: 8px;
-      align-items: center;
-      flex-wrap: wrap;
     }
     .dot {
       width: 10px;
@@ -52,7 +64,7 @@
     .dot.err { background: #d64545; }
     textarea {
       width: 100%;
-      min-height: 60vh;
+      min-height: 55vh;
       box-sizing: border-box;
       resize: vertical;
       border-radius: 12px;
@@ -62,36 +74,60 @@
       background: color-mix(in srgb, Canvas 96%, CanvasText 4%);
       color: inherit;
     }
+    textarea:disabled { opacity: .55; }
     .message {
       margin-top: 10px;
       min-height: 1.4em;
       font-size: 14px;
     }
-    .error {
-      color: #d64545;
-    }
+    .error { color: #d64545; }
+    .muted { opacity: .7; font-size: 14px; }
   </style>
 </head>
 <body>
   <main class="wrap">
     <h1>Firebase JSON Sync Test</h1>
-    <p class="sub">Eén gedeelde JSON voor Mac en iPhone. Wijzigingen worden automatisch gesynchroniseerd.</p>
+    <p class="sub">Beveiligde test: aanmelden en daarna dezelfde JSON synchroniseren tussen Mac en iPhone.</p>
+
+    <section class="card">
+      <div id="loginBox">
+        <div class="row">
+          <input id="email" type="email" autocomplete="username" placeholder="E-mailadres">
+          <input id="password" type="password" autocomplete="current-password" placeholder="Wachtwoord">
+          <button id="loginBtn" type="button">Aanmelden</button>
+        </div>
+        <div class="muted" style="margin-top:8px;">Gebruik het Firebase-account dat je net hebt aangemaakt.</div>
+      </div>
+
+      <div id="loggedInBox" hidden>
+        <div class="row">
+          <strong id="userText"></strong>
+          <button id="logoutBtn" type="button">Afmelden</button>
+        </div>
+      </div>
+    </section>
 
     <section class="statusbar">
       <div class="row">
         <span id="dot" class="dot"></span>
-        <strong id="connection">Verbinden met Firebase…</strong>
+        <strong id="connection">Nog niet aangemeld</strong>
       </div>
       <div id="lastSync">Laatste synchronisatie: —</div>
       <div>Databasepad: <code>test/sharedJson</code></div>
     </section>
 
-    <textarea id="jsonEditor" spellcheck="false" aria-label="Gedeelde JSON"></textarea>
+    <textarea id="jsonEditor" spellcheck="false" aria-label="Gedeelde JSON" disabled>{}</textarea>
     <div id="message" class="message"></div>
   </main>
 
   <script type="module">
     import { initializeApp } from "https://www.gstatic.com/firebasejs/12.19.0/firebase-app.js";
+    import {
+      getAuth,
+      signInWithEmailAndPassword,
+      signOut,
+      onAuthStateChanged
+    } from "https://www.gstatic.com/firebasejs/12.19.0/firebase-auth.js";
     import {
       getDatabase,
       ref,
@@ -109,10 +145,20 @@
       appId: "1:672569696347:web:247fb11fd3d2f663f31f7e"
     };
 
+    const allowedUid = "f1VTVrgUuMgjJ63eM8Av3Lsf6Rg1";
+
     const app = initializeApp(firebaseConfig);
+    const auth = getAuth(app);
     const db = getDatabase(app);
     const sharedRef = ref(db, "test/sharedJson");
 
+    const email = document.getElementById("email");
+    const password = document.getElementById("password");
+    const loginBtn = document.getElementById("loginBtn");
+    const logoutBtn = document.getElementById("logoutBtn");
+    const loginBox = document.getElementById("loginBox");
+    const loggedInBox = document.getElementById("loggedInBox");
+    const userText = document.getElementById("userText");
     const editor = document.getElementById("jsonEditor");
     const dot = document.getElementById("dot");
     const connection = document.getElementById("connection");
@@ -121,51 +167,109 @@
 
     let applyingRemoteUpdate = false;
     let saveTimer = null;
+    let stopListening = null;
 
-    function setStatus(text, ok = true) {
+    function setStatus(text, state = "idle") {
       connection.textContent = text;
-      dot.className = "dot " + (ok ? "ok" : "err");
+      dot.className = "dot" + (state === "ok" ? " ok" : state === "err" ? " err" : "");
     }
 
     function stamp(prefix) {
       lastSync.textContent = `${prefix}: ${new Date().toLocaleString("nl-BE")}`;
     }
 
-    onValue(
-      sharedRef,
-      (snapshot) => {
-        const value = snapshot.val();
-        applyingRemoteUpdate = true;
+    function showError(text) {
+      message.textContent = text;
+      message.className = "message error";
+    }
 
-        editor.value = JSON.stringify(value ?? {}, null, 2);
+    function clearMessage() {
+      message.textContent = "";
+      message.className = "message";
+    }
 
-        applyingRemoteUpdate = false;
-        message.textContent = "";
-        message.className = "message";
-        setStatus("Verbonden met Firebase", true);
-        stamp("Laatste synchronisatie");
-      },
-      (error) => {
-        setStatus("Firebase-fout", false);
-        message.textContent = error.message;
-        message.className = "message error";
+    function startDatabaseListener() {
+      if (stopListening) stopListening();
+
+      stopListening = onValue(
+        sharedRef,
+        (snapshot) => {
+          applyingRemoteUpdate = true;
+          editor.value = JSON.stringify(snapshot.val() ?? {}, null, 2);
+          applyingRemoteUpdate = false;
+          clearMessage();
+          setStatus("Aangemeld en verbonden met Firebase", "ok");
+          stamp("Laatste synchronisatie");
+        },
+        (error) => {
+          setStatus("Firebase-fout", "err");
+          showError(error.message);
+        }
+      );
+    }
+
+    loginBtn.addEventListener("click", async () => {
+      clearMessage();
+      loginBtn.disabled = true;
+      try {
+        await signInWithEmailAndPassword(auth, email.value.trim(), password.value);
+        password.value = "";
+      } catch (error) {
+        showError(`${error.code}: ${error.message}`);
+      } finally {
+        loginBtn.disabled = false;
       }
-    );
+    });
+
+    password.addEventListener("keydown", (event) => {
+      if (event.key === "Enter") loginBtn.click();
+    });
+
+    logoutBtn.addEventListener("click", async () => {
+      await signOut(auth);
+    });
+
+    onAuthStateChanged(auth, (user) => {
+      if (stopListening) {
+        stopListening();
+        stopListening = null;
+      }
+
+      if (!user) {
+        loginBox.hidden = false;
+        loggedInBox.hidden = true;
+        editor.disabled = true;
+        setStatus("Nog niet aangemeld");
+        return;
+      }
+
+      if (user.uid !== allowedUid) {
+        signOut(auth);
+        setStatus("Geen toegang", "err");
+        showError("Dit Firebase-account heeft geen toegang tot deze test.");
+        return;
+      }
+
+      loginBox.hidden = true;
+      loggedInBox.hidden = false;
+      userText.textContent = `Aangemeld als ${user.email}`;
+      editor.disabled = false;
+      setStatus("Aangemeld — verbinden met Firebase…");
+      startDatabaseListener();
+    });
 
     editor.addEventListener("input", () => {
-      if (applyingRemoteUpdate) return;
+      if (applyingRemoteUpdate || !auth.currentUser) return;
 
       clearTimeout(saveTimer);
       saveTimer = setTimeout(async () => {
         let parsed;
-
         try {
           parsed = JSON.parse(editor.value);
           message.textContent = "JSON geldig — synchroniseren…";
           message.className = "message";
-        } catch (error) {
-          message.textContent = "JSON is niet geldig. Er wordt niets naar Firebase geschreven.";
-          message.className = "message error";
+        } catch {
+          showError("JSON is niet geldig. Er wordt niets naar Firebase geschreven.");
           return;
         }
 
@@ -175,9 +279,8 @@
           message.className = "message";
           stamp("Laatste lokale wijziging");
         } catch (error) {
-          setStatus("Schrijven naar Firebase mislukt", false);
-          message.textContent = error.message;
-          message.className = "message error";
+          setStatus("Schrijven naar Firebase mislukt", "err");
+          showError(error.message);
         }
       }, 600);
     });

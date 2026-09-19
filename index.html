@@ -1,0 +1,186 @@
+<!doctype html>
+<html lang="nl">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>Firebase JSON Sync Test</title>
+  <style>
+    :root {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      color-scheme: light dark;
+    }
+    body {
+      margin: 0;
+      padding: 24px;
+      background: Canvas;
+      color: CanvasText;
+    }
+    .wrap {
+      max-width: 900px;
+      margin: 0 auto;
+    }
+    h1 {
+      margin: 0 0 8px;
+      font-size: 28px;
+    }
+    .sub {
+      margin: 0 0 20px;
+      opacity: .75;
+    }
+    .statusbar {
+      display: grid;
+      gap: 8px;
+      margin-bottom: 16px;
+      padding: 14px;
+      border: 1px solid color-mix(in srgb, CanvasText 18%, transparent);
+      border-radius: 12px;
+    }
+    .row {
+      display: flex;
+      gap: 8px;
+      align-items: center;
+      flex-wrap: wrap;
+    }
+    .dot {
+      width: 10px;
+      height: 10px;
+      border-radius: 50%;
+      background: #888;
+      flex: 0 0 auto;
+    }
+    .dot.ok { background: #1f9d55; }
+    .dot.err { background: #d64545; }
+    textarea {
+      width: 100%;
+      min-height: 60vh;
+      box-sizing: border-box;
+      resize: vertical;
+      border-radius: 12px;
+      border: 1px solid color-mix(in srgb, CanvasText 18%, transparent);
+      padding: 14px;
+      font: 15px/1.5 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      background: color-mix(in srgb, Canvas 96%, CanvasText 4%);
+      color: inherit;
+    }
+    .message {
+      margin-top: 10px;
+      min-height: 1.4em;
+      font-size: 14px;
+    }
+    .error {
+      color: #d64545;
+    }
+  </style>
+</head>
+<body>
+  <main class="wrap">
+    <h1>Firebase JSON Sync Test</h1>
+    <p class="sub">Eén gedeelde JSON voor Mac en iPhone. Wijzigingen worden automatisch gesynchroniseerd.</p>
+
+    <section class="statusbar">
+      <div class="row">
+        <span id="dot" class="dot"></span>
+        <strong id="connection">Verbinden met Firebase…</strong>
+      </div>
+      <div id="lastSync">Laatste synchronisatie: —</div>
+      <div>Databasepad: <code>test/sharedJson</code></div>
+    </section>
+
+    <textarea id="jsonEditor" spellcheck="false" aria-label="Gedeelde JSON"></textarea>
+    <div id="message" class="message"></div>
+  </main>
+
+  <script type="module">
+    import { initializeApp } from "https://www.gstatic.com/firebasejs/12.19.0/firebase-app.js";
+    import {
+      getDatabase,
+      ref,
+      onValue,
+      set
+    } from "https://www.gstatic.com/firebasejs/12.19.0/firebase-database.js";
+
+    const firebaseConfig = {
+      apiKey: "AIzaSyD1tdycD-rLDVFQZSReIK4QgHN-m1JGNjA",
+      authDomain: "filamentsynctest.firebaseapp.com",
+      databaseURL: "https://filamentsynctest-default-rtdb.europe-west1.firebasedatabase.app",
+      projectId: "filamentsynctest",
+      storageBucket: "filamentsynctest.firebasestorage.app",
+      messagingSenderId: "672569696347",
+      appId: "1:672569696347:web:247fb11fd3d2f663f31f7e"
+    };
+
+    const app = initializeApp(firebaseConfig);
+    const db = getDatabase(app);
+    const sharedRef = ref(db, "test/sharedJson");
+
+    const editor = document.getElementById("jsonEditor");
+    const dot = document.getElementById("dot");
+    const connection = document.getElementById("connection");
+    const lastSync = document.getElementById("lastSync");
+    const message = document.getElementById("message");
+
+    let applyingRemoteUpdate = false;
+    let saveTimer = null;
+
+    function setStatus(text, ok = true) {
+      connection.textContent = text;
+      dot.className = "dot " + (ok ? "ok" : "err");
+    }
+
+    function stamp(prefix) {
+      lastSync.textContent = `${prefix}: ${new Date().toLocaleString("nl-BE")}`;
+    }
+
+    onValue(
+      sharedRef,
+      (snapshot) => {
+        const value = snapshot.val();
+        applyingRemoteUpdate = true;
+
+        editor.value = JSON.stringify(value ?? {}, null, 2);
+
+        applyingRemoteUpdate = false;
+        message.textContent = "";
+        message.className = "message";
+        setStatus("Verbonden met Firebase", true);
+        stamp("Laatste synchronisatie");
+      },
+      (error) => {
+        setStatus("Firebase-fout", false);
+        message.textContent = error.message;
+        message.className = "message error";
+      }
+    );
+
+    editor.addEventListener("input", () => {
+      if (applyingRemoteUpdate) return;
+
+      clearTimeout(saveTimer);
+      saveTimer = setTimeout(async () => {
+        let parsed;
+
+        try {
+          parsed = JSON.parse(editor.value);
+          message.textContent = "JSON geldig — synchroniseren…";
+          message.className = "message";
+        } catch (error) {
+          message.textContent = "JSON is niet geldig. Er wordt niets naar Firebase geschreven.";
+          message.className = "message error";
+          return;
+        }
+
+        try {
+          await set(sharedRef, parsed);
+          message.textContent = "Gesynchroniseerd.";
+          message.className = "message";
+          stamp("Laatste lokale wijziging");
+        } catch (error) {
+          setStatus("Schrijven naar Firebase mislukt", false);
+          message.textContent = error.message;
+          message.className = "message error";
+        }
+      }, 600);
+    });
+  </script>
+</body>
+</html>
